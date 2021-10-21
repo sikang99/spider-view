@@ -3,7 +3,7 @@
 #
 PROG=spider-view
 VERSION=0.0.0
-BUILD=$(VERSION).1
+BUILD=$(VERSION).2
 #LOCAL_URL="wss://localhost:8267/live/ws/pub?channel=bq5ame6g10l3jia3h0ng"
 #REMOTE_URL="wss://cobot.center:8267/live/ws/pub?channel=bq5ame6g10l3jia3h0ng"
 LOCAL="localhost:8267"
