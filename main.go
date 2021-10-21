@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"runtime"
 	"strconv"
 	"time"
 
@@ -25,8 +26,10 @@ import (
 
 	"github.com/pion/rtcp"
 	"github.com/pion/webrtc/v2"
-	"github.com/pion/webrtc/v2/pkg/media/ivfwriter"
 )
+
+//---------------------------------------------------------------------------------
+const Version = "0.0.0.2"
 
 //---------------------------------------------------------------------------------
 type WsMessage struct {
@@ -35,7 +38,6 @@ type WsMessage struct {
 }
 
 type Program struct {
-	Ok               bool   `json:"ok"`
 	VideoWidth       int    `json:"video_width,omitempty"`
 	VideoHeight      int    `json:"video_height,omitempty"`
 	BitRate          int    `json:"bit_rate,omitempty"`
@@ -53,6 +55,7 @@ type Program struct {
 	ChannelID        string `json:"channel_id,omitempty"`
 	URL              string `json:"url,omitempty"`
 	// -- Internal handling parts
+	ok     bool
 	pc     *webrtc.PeerConnection
 	ws     *websocket.Conn
 	msgch  chan WsMessage
@@ -66,6 +69,7 @@ type Program struct {
 
 //---------------------------------------------------------------------------------
 func init() {
+	runtime.LockOSThread()
 	log.SetFlags(log.Ldate | log.Ltime | log.Lshortfile)
 }
 
@@ -75,7 +79,7 @@ func main() {
 
 	// Default program settings
 	pg := &Program{
-		Ok:               true,
+
 		VideoWidth:       1280,
 		VideoHeight:      720,
 		BitRate:          1_000_000, // 1Mbps
@@ -89,6 +93,7 @@ func main() {
 		ICEServer:        "cobot.center:3478",
 		SpiderServer:     "localhost:8267",
 		ChannelID:        "bq5ame6g10l3jia3h0ng", // CoJam.Shop channel
+		ok:               true,
 		msgch:            make(chan WsMessage, 2),
 	}
 
@@ -116,12 +121,12 @@ func main() {
 			pg.SpiderServer, pg.ChannelID, pg.VideoCodec)
 	}
 
-	err := pg.openFFmpeg()
-	if err != nil {
-		log.Println(err)
-		return
-	}
-	defer pg.closeFFmpeg()
+	// err := pg.openFFmpeg()
+	// if err != nil {
+	// 	log.Println(err)
+	// 	return
+	// }
+	// defer pg.closeFFmpeg()
 
 	ws, err := pg.connectWebsocketByUrl(pg.URL, 1024)
 	if err != nil {
@@ -140,7 +145,7 @@ func main() {
 	me.RegisterDefaultCodecs()
 
 	api := webrtc.NewAPI(webrtc.WithMediaEngine(me))
-	pc, err := api.NewPeerConnection(rtcConfig)
+	pg.pc, err = api.NewPeerConnection(rtcConfig)
 
 	if err != nil {
 		log.Println(err)
@@ -148,42 +153,41 @@ func main() {
 	}
 	// log.Println(pc)
 
-	ivfWriter, err := ivfwriter.NewWith(pg.ffmpeg.stdin)
-	if err != nil {
-		log.Println(err)
-		return
-	}
+	// ivfWriter, err := ivfwriter.NewWith(pg.ffmpeg.stdin)
+	// if err != nil {
+	// 	log.Println(err)
+	// 	return
+	// }
 
-	pc.OnICEConnectionStateChange(func(connectionState webrtc.ICEConnectionState) {
+	pg.pc.OnICEConnectionStateChange(func(connectionState webrtc.ICEConnectionState) {
 		log.Println("w.OnICEConnectionState:", connectionState)
 		if connectionState == webrtc.ICEConnectionStateDisconnected {
 			os.Exit(0)
 		}
 	})
 
-	pc.OnICECandidate(func(iceCandidate *webrtc.ICECandidate) {
+	pg.pc.OnICECandidate(func(iceCandidate *webrtc.ICECandidate) {
 		log.Println("w.OnICECandidate:", iceCandidate)
-		// send candidates to the peer (server)
-		// if iceCandidate != nil {
-		// 	candidate := iceCandidate.ToJSON()
-		// 	data, err := json.Marshal(candidate)
-		// 	if err != nil {
-		// 		log.Println("json.Marshal", err)
-		// 		return
-		// 	}
-		// 	pg.msgch <- WsMessage{
-		// 		Type: "send-candidate2",
-		// 		Data: string(data),
-		// 	}
-		// }
+		if iceCandidate != nil {
+			candidate := iceCandidate.ToJSON()
+			data, err := json.Marshal(candidate)
+			if err != nil {
+				log.Println("json.Marshal", err)
+				return
+			}
+			pg.msgch <- WsMessage{
+				Type: "send-candidate2",
+				Data: string(data),
+			}
+		}
 	})
 
-	pc.OnTrack(func(track *webrtc.Track, receiver *webrtc.RTPReceiver) {
+	pg.pc.OnTrack(func(track *webrtc.Track, receiver *webrtc.RTPReceiver) {
 		// Send a PLI on an interval so that the publisher is pushing a keyframe every rtcpPLIInterval
 		go func() {
 			ticker := time.NewTicker(time.Second * 3)
 			for range ticker.C {
-				err := pc.WriteRTCP([]rtcp.Packet{&rtcp.PictureLossIndication{MediaSSRC: uint32(track.SSRC())}})
+				err := pg.pc.WriteRTCP([]rtcp.Packet{&rtcp.PictureLossIndication{MediaSSRC: uint32(track.SSRC())}})
 				if err != nil {
 					log.Println(err)
 					return
@@ -195,34 +199,39 @@ func main() {
 			track.PayloadType(), track.Codec().RTPCodecCapability.MimeType)
 		for {
 			// Read RTP packets being sent to Pion
-			rtp, err := track.ReadRTP()
+			// rtp, err := track.ReadRTP()
+			_, err := track.ReadRTP()
 			if err != nil {
 				log.Println(err)
 				return
 			}
 
-			err = ivfWriter.WriteRTP(rtp)
-			if err != nil {
-				log.Println(err)
-				return
-			}
+			// err = ivfWriter.WriteRTP(rtp)
+			// if err != nil {
+			// 	log.Println(err)
+			// 	return
+			// }
 		}
+	})
+
+	pg.pc.OnDataChannel(func(dc *webrtc.DataChannel) {
+		log.Println("w.OnDataChannel:", dc.ID(), dc.Label())
 	})
 
 	// go pg.detectMotion()
 
-	err = pg.sendOfferByWebsocket(ws, pc)
+	err = pg.addRecvMediaTranceivers(true, true)
 	if err != nil {
 		log.Println(err)
 		return
 	}
 
-	err = pg.procMessageByWebsocket(ws, pc)
+	go pg.procMessageByWebsocket(ws)
+	err = pg.sendOfferByWebsocket(ws)
 	if err != nil {
 		log.Println(err)
 		return
 	}
-
 }
 
 //---------------------------------------------------------------------------------
@@ -275,7 +284,7 @@ func (d *Program) detectMotion() (err error) {
 	img := gocv.NewMat()
 	defer img.Close() //nolint
 
-	for d.Ok {
+	for d.ok {
 		buf := make([]byte, d.VideoWidth*d.VideoHeight*3)
 		_, err := io.ReadFull(d.ffmpeg.stdout, buf)
 		if err != nil {
@@ -323,6 +332,27 @@ func (d *Program) setRTCConfiguratrion() (rtcConfig webrtc.Configuration) {
 }
 
 //---------------------------------------------------------------------------------
+func (d *Program) addRecvMediaTranceivers(faudio, fvideo bool) (err error) {
+	log.Println("i.addRecvMediaTranceivers:", faudio, fvideo)
+
+	if faudio {
+		_, err = d.pc.AddTransceiver(webrtc.RTPCodecTypeAudio)
+		if err != nil {
+			log.Println(err)
+			return
+		}
+	}
+	if fvideo {
+		_, err = d.pc.AddTransceiver(webrtc.RTPCodecTypeVideo)
+		if err != nil {
+			log.Println(err)
+			return
+		}
+	}
+	return
+}
+
+//---------------------------------------------------------------------------------
 func (d *Program) connectWebsocketByUrl(url string, bsize int) (ws *websocket.Conn, err error) {
 	log.Println("i.connectUrlByWebsocket:", url)
 
@@ -338,24 +368,21 @@ func (d *Program) connectWebsocketByUrl(url string, bsize int) (ws *websocket.Co
 		log.Println(err)
 		return
 	}
-
-	d.ws = ws
 	return
 }
 
 //---------------------------------------------------------------------------------
-func (d *Program) sendOfferByWebsocket(ws *websocket.Conn, pc *webrtc.PeerConnection) (err error) {
+func (d *Program) sendOfferByWebsocket(ws *websocket.Conn) (err error) {
 	log.Println("i.sendOfferByWebsocket")
 	defer log.Println("o.sendOfferByWebsocket", err)
 
-	offer, err := pc.CreateOffer(nil)
+	offer, err := d.pc.CreateOffer(nil)
 	if err != nil {
 		log.Println(err)
 		return
 	}
-	// log.Println(offer)
 
-	err = pc.SetLocalDescription(offer)
+	err = d.pc.SetLocalDescription(offer)
 	if err != nil {
 		log.Println(err)
 		return
@@ -365,18 +392,28 @@ func (d *Program) sendOfferByWebsocket(ws *websocket.Conn, pc *webrtc.PeerConnec
 		Type: "send-offer",
 		Data: offer.SDP,
 	}
+
+	for d.ok {
+		rmsg := WsMessage{}
+		err = ws.ReadJSON(&rmsg)
+		if err != nil {
+			log.Println(err)
+			return
+		}
+		d.msgch <- rmsg
+	}
 	return
 }
 
 //---------------------------------------------------------------------------------
-func (d *Program) procMessageByWebsocket(ws *websocket.Conn, pc *webrtc.PeerConnection) (err error) {
+func (d *Program) procMessageByWebsocket(ws *websocket.Conn) (err error) {
 	log.Println("i.procMessageByWebsocket")
 	defer log.Println("o.ProcMessageByWebsocket", err)
 
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 
-	for d.Ok {
+	for d.ok {
 		select {
 		case <-ticker.C:
 			ws.WriteJSON(&WsMessage{
@@ -390,24 +427,24 @@ func (d *Program) procMessageByWebsocket(ws *websocket.Conn, pc *webrtc.PeerConn
 			}
 			// log.Println(m.Type)
 			switch m.Type {
-			case "ping", "joins":
+			case "ping", "pong", "joins":
 				log.Println("[msg]", m)
 			case "offer":
 				offer := webrtc.SessionDescription{
 					Type: webrtc.SDPTypeOffer,
 					SDP:  m.Data,
 				}
-				err = pc.SetRemoteDescription(offer)
+				err = d.pc.SetRemoteDescription(offer)
 				if err != nil {
 					log.Println("pc.SetRemoteDescription", err)
 					return
 				}
-				answer, err := pc.CreateAnswer(nil)
+				answer, err := d.pc.CreateAnswer(nil)
 				if err != nil {
 					log.Println(err)
 					return err
 				}
-				err = pc.SetLocalDescription(answer)
+				err = d.pc.SetLocalDescription(answer)
 				if err != nil {
 					log.Println("pc.SetLocalDescription", err)
 					return err
@@ -421,7 +458,7 @@ func (d *Program) procMessageByWebsocket(ws *websocket.Conn, pc *webrtc.PeerConn
 					Type: webrtc.SDPTypeAnswer,
 					SDP:  m.Data,
 				}
-				err = pc.SetRemoteDescription(answer)
+				err = d.pc.SetRemoteDescription(answer)
 				if err != nil {
 					log.Println("pc.SetRemoteDescription", err)
 					return
@@ -431,7 +468,7 @@ func (d *Program) procMessageByWebsocket(ws *websocket.Conn, pc *webrtc.PeerConn
 				candidate := webrtc.ICECandidateInit{
 					Candidate: m.Data,
 				}
-				err = pc.AddICECandidate(candidate)
+				err = d.pc.AddICECandidate(candidate)
 				if err != nil {
 					log.Println("pc.AddICECandidate:", err)
 					return
@@ -444,7 +481,7 @@ func (d *Program) procMessageByWebsocket(ws *websocket.Conn, pc *webrtc.PeerConn
 					log.Println("json.Unmarshal:", err)
 					break
 				}
-				err = pc.AddICECandidate(candidate)
+				err = d.pc.AddICECandidate(candidate)
 				if err != nil {
 					log.Println("pc.AddICECandidate:", err)
 					return
