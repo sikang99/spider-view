@@ -1,7 +1,4 @@
-## spider-view
-Spider Video Viewer
-
-
+## Spider Video Viewer
 
 
 ### Articles

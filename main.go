@@ -1,12 +1,13 @@
 //=================================================================================
 //	Filaname: main.go
-// 	Function: main function of device shooter program
+// 	Function: main function of video viewer program
 // 	Author: Stoney Kang, sikang@teamgrit.kr
 // 	Copyright: TeamGRIT, 2021
 //=================================================================================
 package main
 
 import (
+	"bufio"
 	"crypto/tls"
 	"encoding/json"
 	"flag"
@@ -14,6 +15,8 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
+	"strconv"
 
 	"github.com/gorilla/websocket"
 
@@ -27,22 +30,23 @@ type WsMessage struct {
 }
 
 type PGConfig struct {
-	VideoWidth       int    `json:"video_width,omitempty"`
-	VideoHeight      int    `json:"video_height,omitempty"`
-	BitRate          int    `json:"bit_rate,omitempty"`
-	KeyFrameInterval int    `json:"key_frame_interval,omitempty"`
-	VideoNouse       bool   `json:"video_nouse,omitempty"`
-	AudioNouse       bool   `json:"audio_nouse,omitempty"`
-	VideoCodec       string `json:"video_codec,omitempty"`
-	AudioCodec       string `json:"audio_codec,omitempty"`
-	VideoType        string `json:"video_type,omitempty"`
-	AudioType        string `json:"audio_type,omitempty"`
-	VideoLabel       string `json:"video_label,omitempty"` // video device name (label)
-	AudioLabel       string `json:"audio_label,omitempty"` // audio device name (label)
-	ICEServer        string `json:"ice_server,omitempty"`
-	SpiderServer     string `json:"spider_server,omitempty"`
-	ChannelID        string `json:"channel_id,omitempty"`
-	URL              string `json:"url,omitempty"`
+	VideoWidth       int       `json:"video_width,omitempty"`
+	VideoHeight      int       `json:"video_height,omitempty"`
+	BitRate          int       `json:"bit_rate,omitempty"`
+	KeyFrameInterval int       `json:"key_frame_interval,omitempty"`
+	VideoNouse       bool      `json:"video_nouse,omitempty"`
+	AudioNouse       bool      `json:"audio_nouse,omitempty"`
+	VideoCodec       string    `json:"video_codec,omitempty"`
+	AudioCodec       string    `json:"audio_codec,omitempty"`
+	VideoType        string    `json:"video_type,omitempty"`
+	AudioType        string    `json:"audio_type,omitempty"`
+	VideoLabel       string    `json:"video_label,omitempty"` // video device name (label)
+	AudioLabel       string    `json:"audio_label,omitempty"` // audio device name (label)
+	ICEServer        string    `json:"ice_server,omitempty"`
+	SpiderServer     string    `json:"spider_server,omitempty"`
+	ChannelID        string    `json:"channel_id,omitempty"`
+	URL              string    `json:"url,omitempty"`
+	ffmpeg           *exec.Cmd `json:"-"`
 }
 
 //---------------------------------------------------------------------------------
@@ -72,16 +76,16 @@ func main() {
 	}
 
 	// Handle command line options
-	flag.IntVar(&pgConfig.VideoWidth, "vwidth", pgConfig.VideoWidth, "video width to use")
-	flag.IntVar(&pgConfig.VideoHeight, "vheight", pgConfig.VideoHeight, "video height to use")
-	flag.BoolVar(&pgConfig.VideoNouse, "vnouse", pgConfig.VideoNouse, "video no use")
-	flag.BoolVar(&pgConfig.AudioNouse, "anouse", pgConfig.AudioNouse, "audio no use")
-	flag.StringVar(&pgConfig.VideoType, "vtype", pgConfig.VideoType, "video device type [camera|screen]")
-	flag.StringVar(&pgConfig.AudioType, "atype", pgConfig.AudioType, "audio device type [microphone]")
-	flag.StringVar(&pgConfig.VideoLabel, "vlabel", pgConfig.VideoLabel, "label of video device to select")
-	flag.StringVar(&pgConfig.AudioLabel, "alabel", pgConfig.AudioLabel, "label of audio device to select")
-	flag.StringVar(&pgConfig.VideoCodec, "vcodec", pgConfig.VideoCodec, "video codec to use [h264|vp8|vp9]")
-	flag.StringVar(&pgConfig.AudioCodec, "acodec", pgConfig.AudioCodec, "audio codec to use [opus]")
+	// flag.IntVar(&pgConfig.VideoWidth, "vwidth", pgConfig.VideoWidth, "video width to use")
+	// flag.IntVar(&pgConfig.VideoHeight, "vheight", pgConfig.VideoHeight, "video height to use")
+	// flag.BoolVar(&pgConfig.VideoNouse, "vnouse", pgConfig.VideoNouse, "video no use")
+	// flag.BoolVar(&pgConfig.AudioNouse, "anouse", pgConfig.AudioNouse, "audio no use")
+	// flag.StringVar(&pgConfig.VideoType, "vtype", pgConfig.VideoType, "video device type [camera|screen]")
+	// flag.StringVar(&pgConfig.AudioType, "atype", pgConfig.AudioType, "audio device type [microphone]")
+	// flag.StringVar(&pgConfig.VideoLabel, "vlabel", pgConfig.VideoLabel, "label of video device to select")
+	// flag.StringVar(&pgConfig.AudioLabel, "alabel", pgConfig.AudioLabel, "label of audio device to select")
+	// flag.StringVar(&pgConfig.VideoCodec, "vcodec", pgConfig.VideoCodec, "video codec to use [h264|vp8|vp9]")
+	// flag.StringVar(&pgConfig.AudioCodec, "acodec", pgConfig.AudioCodec, "audio codec to use [opus]")
 	flag.IntVar(&pgConfig.BitRate, "brate", pgConfig.BitRate, "bit rate of video to send in bps")
 	flag.IntVar(&pgConfig.KeyFrameInterval, "kint", pgConfig.KeyFrameInterval, "key frame interval")
 	flag.StringVar(&pgConfig.ICEServer, "ice", pgConfig.ICEServer, "ice server address to use")
@@ -91,8 +95,14 @@ func main() {
 	flag.Parse()
 
 	if pgConfig.URL == "" {
-		pgConfig.URL = fmt.Sprintf("wss://%s/live/ws/pub?channel=%s&vcodec=%s",
+		pgConfig.URL = fmt.Sprintf("wss://%s/live/ws/sub?channel=%s&vcodec=%s",
 			pgConfig.SpiderServer, pgConfig.ChannelID, pgConfig.VideoCodec)
+	}
+
+	err := pgConfig.prepareFFmpeg()
+	if err != nil {
+		log.Println(err)
+		return
 	}
 
 	ws, err := ConnectWebsocketByUrl(pgConfig.URL, 1024)
@@ -158,6 +168,37 @@ func main() {
 		log.Println(err)
 		return
 	}
+}
+
+//---------------------------------------------------------------------------------
+func (d *PGConfig) prepareFFmpeg() (err error) {
+	d.ffmpeg = exec.Command("ffmpeg", "-i", "pipe:0", "-pix_fmt", "bgr24", "-s",
+		strconv.Itoa(d.VideoWidth)+"x"+strconv.Itoa(d.VideoHeight), "-f", "rawvideo", "pipe:1") //nolint
+	if d.ffmpeg == nil {
+		err = fmt.Errorf("ffmpeg exec error")
+		log.Println(err)
+		return
+	}
+
+	ffmpegErr, err := d.ffmpeg.StderrPipe()
+	if err != nil {
+		log.Println(err)
+		return
+	}
+
+	err = d.ffmpeg.Start()
+	if err != nil {
+		log.Println(err)
+		return
+	}
+
+	go func() {
+		scanner := bufio.NewScanner(ffmpegErr)
+		for scanner.Scan() {
+			log.Println(scanner.Text())
+		}
+	}()
+	return
 }
 
 //---------------------------------------------------------------------------------
