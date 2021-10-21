@@ -14,25 +14,10 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"strings"
 
 	"github.com/gorilla/websocket"
 
-	"github.com/pion/mediadevices"
-	// "github.com/pion/mediadevices/pkg/codec/mmal"
-	"github.com/pion/mediadevices/pkg/codec/opus"
-	"github.com/pion/mediadevices/pkg/codec/vpx"
-	"github.com/pion/mediadevices/pkg/codec/x264"
-	"github.com/pion/mediadevices/pkg/driver"
-	"github.com/pion/mediadevices/pkg/frame"
-	"github.com/pion/mediadevices/pkg/prop"
 	"github.com/pion/webrtc/v3"
-
-	_ "github.com/pion/mediadevices/pkg/driver/camera"
-	_ "github.com/pion/mediadevices/pkg/driver/microphone"
-	_ "github.com/pion/mediadevices/pkg/driver/screen"
-	// _ "github.com/pion/mediadevices/pkg/driver/audiotest"
-	// _ "github.com/pion/mediadevices/pkg/driver/videotest"
 )
 
 //---------------------------------------------------------------------------------
@@ -42,24 +27,22 @@ type WsMessage struct {
 }
 
 type PGConfig struct {
-	VideoWidth       int                          `json:"video_width,omitempty"`
-	VideoHeight      int                          `json:"video_height,omitempty"`
-	BitRate          int                          `json:"bit_rate,omitempty"`
-	KeyFrameInterval int                          `json:"key_frame_interval,omitempty"`
-	VideoNouse       bool                         `json:"video_nouse,omitempty"`
-	AudioNouse       bool                         `json:"audio_nouse,omitempty"`
-	VideoCodec       string                       `json:"video_codec,omitempty"`
-	AudioCodec       string                       `json:"audio_codec,omitempty"`
-	VideoType        string                       `json:"video_type,omitempty"`
-	AudioType        string                       `json:"audio_type,omitempty"`
-	VideoLabel       string                       `json:"video_label,omitempty"` // video device name (label)
-	AudioLabel       string                       `json:"audio_label,omitempty"` // audio device name (label)
-	ICEServer        string                       `json:"ice_server,omitempty"`
-	SpiderServer     string                       `json:"spider_server,omitempty"`
-	ChannelID        string                       `json:"channel_id,omitempty"`
-	URL              string                       `json:"url,omitempty"`
-	VideoDevice      mediadevices.MediaDeviceInfo `json:"video_device,omitempty"`
-	AudioDevice      mediadevices.MediaDeviceInfo `json:"audio_device,omitempty"`
+	VideoWidth       int    `json:"video_width,omitempty"`
+	VideoHeight      int    `json:"video_height,omitempty"`
+	BitRate          int    `json:"bit_rate,omitempty"`
+	KeyFrameInterval int    `json:"key_frame_interval,omitempty"`
+	VideoNouse       bool   `json:"video_nouse,omitempty"`
+	AudioNouse       bool   `json:"audio_nouse,omitempty"`
+	VideoCodec       string `json:"video_codec,omitempty"`
+	AudioCodec       string `json:"audio_codec,omitempty"`
+	VideoType        string `json:"video_type,omitempty"`
+	AudioType        string `json:"audio_type,omitempty"`
+	VideoLabel       string `json:"video_label,omitempty"` // video device name (label)
+	AudioLabel       string `json:"audio_label,omitempty"` // audio device name (label)
+	ICEServer        string `json:"ice_server,omitempty"`
+	SpiderServer     string `json:"spider_server,omitempty"`
+	ChannelID        string `json:"channel_id,omitempty"`
+	URL              string `json:"url,omitempty"`
 }
 
 //---------------------------------------------------------------------------------
@@ -69,7 +52,7 @@ func init() {
 
 //---------------------------------------------------------------------------------
 func main() {
-	fmt.Printf("Spider Device Shooter, v%s (c)TeamGRIT, 2021\n", Version)
+	fmt.Printf("Spider Video Viewer, v%s (c)TeamGRIT, 2021\n", Version)
 
 	// Default program settings
 	pgConfig := &PGConfig{
@@ -125,33 +108,7 @@ func main() {
 	// rc, _ := json.Marshal(rtcConfig)
 	// log.Println(string(rc))
 
-	ListDevices()
-	pgConfig.VideoDevice, err = GetDeviceInfoByType(
-		mediadevices.MediaDeviceType(1),       // video(1)
-		driver.DeviceType(pgConfig.VideoType), // camera, screen
-		pgConfig.VideoLabel)                   // number or name of device
-	if err != nil {
-		log.Println(err)
-		return
-	}
-
-	pgConfig.AudioDevice, err = GetDeviceInfoByType(
-		mediadevices.MediaDeviceType(2),       // audio(2)
-		driver.DeviceType(pgConfig.AudioType), // micrphohone, (speaker?)
-		pgConfig.AudioLabel)                   // number or name of device
-	if err != nil {
-		log.Println(err)
-		return
-	}
-
-	codecSelector, err := pgConfig.SetMediaCodecSelector()
-	if err != nil {
-		log.Println(err)
-		return
-	}
-
 	mediaEngine := webrtc.MediaEngine{}
-	codecSelector.Populate(&mediaEngine)
 	// log.Println(mediaEngine)
 
 	api := webrtc.NewAPI(webrtc.WithMediaEngine(&mediaEngine))
@@ -190,31 +147,6 @@ func main() {
 		}
 	})
 
-	ms, err := pgConfig.GetMediaStreamByNouse(codecSelector)
-	if err != nil {
-		log.Println(err)
-		return
-	}
-	// log.Println(ms)
-
-	for _, track := range ms.GetTracks() {
-		log.Println("Track:", track.Kind(), track.ID(), track.StreamID())
-
-		track.OnEnded(func(err error) {
-			log.Println("w.OnEnded", track.ID(), err)
-		})
-
-		_, err = pc.AddTransceiverFromTrack(track,
-			webrtc.RtpTransceiverInit{
-				Direction: webrtc.RTPTransceiverDirectionSendonly,
-			},
-		)
-		if err != nil {
-			log.Println(err)
-			return
-		}
-	}
-
 	err = SendOfferByWebsocket(ws, pc)
 	if err != nil {
 		log.Println(err)
@@ -226,53 +158,6 @@ func main() {
 		log.Println(err)
 		return
 	}
-}
-
-//---------------------------------------------------------------------------------
-func (d *PGConfig) GetMediaStreamByNouse(cs *mediadevices.CodecSelector) (ms mediadevices.MediaStream, err error) {
-	log.Println("i.GetMediaStreamByNouse:", d.AudioNouse, d.VideoNouse)
-
-	var video, audio mediadevices.MediaOption
-	switch d.VideoType {
-	case "camera":
-		if !d.VideoNouse {
-			video = func(c *mediadevices.MediaTrackConstraints) {
-				c.DeviceID = prop.String(d.VideoDevice.DeviceID)
-				c.FrameFormat = prop.FrameFormat(frame.FormatI420)
-				c.Width = prop.Int(d.VideoWidth)
-				c.Height = prop.Int(d.VideoHeight)
-			}
-		}
-		if !d.AudioNouse {
-			audio = func(c *mediadevices.MediaTrackConstraints) {
-				c.DeviceID = prop.String(d.AudioDevice.DeviceID)
-			}
-		}
-		ms, err = mediadevices.GetUserMedia(mediadevices.MediaStreamConstraints{
-			Video: video,
-			Audio: audio,
-			Codec: cs,
-		})
-	case "screen":
-		if !d.VideoNouse {
-			video = func(c *mediadevices.MediaTrackConstraints) {
-				c.DeviceID = prop.String(d.VideoDevice.DeviceID)
-			}
-		}
-		if !d.AudioNouse {
-			audio = func(c *mediadevices.MediaTrackConstraints) {
-				c.DeviceID = prop.String(d.AudioDevice.DeviceID)
-			}
-		}
-		ms, err = mediadevices.GetDisplayMedia(mediadevices.MediaStreamConstraints{
-			Video: video,
-			Audio: audio,
-			Codec: cs,
-		})
-	default:
-		err = fmt.Errorf("unknown device type: %s, %s", d.VideoType, d.AudioType)
-	}
-	return
 }
 
 //---------------------------------------------------------------------------------
@@ -297,111 +182,6 @@ func (d *PGConfig) SetRTCConfiguratrion() (rtcConfig webrtc.Configuration) {
 		ICETransportPolicy: webrtc.ICETransportPolicyAll, // Policy[Relay|All]
 		PeerIdentity:       "spider-device",
 		SDPSemantics:       webrtc.SDPSemanticsUnifiedPlan,
-	}
-	return
-}
-
-//---------------------------------------------------------------------------------
-func (d *PGConfig) SetMediaCodecSelector() (cs *mediadevices.CodecSelector, err error) {
-	log.Println("i.SetMediaCodecSelector:", d.VideoCodec, d.AudioCodec)
-
-	opusParams, err := opus.NewParams()
-	if err != nil {
-		log.Println(err)
-		return nil, err
-	}
-
-	switch d.VideoCodec {
-	case "h264", "x264":
-		x264Params, err := x264.NewParams()
-		if err != nil {
-			log.Println(err)
-			return nil, err
-		}
-		x264Params.Preset = x264.PresetSuperfast // Superfast: High, Ultrafast: Constrained Baseline
-		x264Params.BitRate = d.BitRate
-		x264Params.KeyFrameInterval = d.KeyFrameInterval
-
-		cs = mediadevices.NewCodecSelector(
-			mediadevices.WithVideoEncoders(&x264Params),
-			mediadevices.WithAudioEncoders(&opusParams),
-		)
-	// case "mmal": // for Raspberry Pi
-	// 	mmalParams, err := mmal.NewParams()
-	// 	if err != nil {
-	// 		log.Println(err)
-	// 		return cs, err
-	// 	}
-
-	// 	cs = mediadevices.NewCodecSelector(
-	// 		mediadevices.WithVideoEncoders(&mmalParams),
-	// 		mediadevices.WithAudioEncoders(&opusParams),
-	// 	)
-	// case "mmapi": // for Jetson Multimedia API
-	case "vp8":
-		vp8Params, err := vpx.NewVP8Params()
-		if err != nil {
-			log.Println(err)
-			return cs, err
-		}
-
-		cs = mediadevices.NewCodecSelector(
-			mediadevices.WithVideoEncoders(&vp8Params),
-			mediadevices.WithAudioEncoders(&opusParams),
-		)
-	case "vp9":
-		vp9Params, err := vpx.NewVP9Params()
-		if err != nil {
-			log.Println(err)
-			return cs, err
-		}
-
-		cs = mediadevices.NewCodecSelector(
-			mediadevices.WithVideoEncoders(&vp9Params),
-			mediadevices.WithAudioEncoders(&opusParams),
-		)
-	default:
-		err = fmt.Errorf("not supported codecs: %s, %s", d.VideoCodec, d.AudioCodec)
-	}
-
-	return
-}
-
-//---------------------------------------------------------------------------------
-func CaseInsensitiveContains(s, substr string) bool {
-	s, substr = strings.ToUpper(s), strings.ToUpper(substr)
-	return strings.Contains(s, substr)
-}
-
-func ListDevices() {
-	mds := mediadevices.EnumerateDevices()
-	for _, md := range mds {
-		log.Println("[device]", md.DeviceID, md.Kind, md.Label, md.DeviceType)
-	}
-}
-
-func GetDeviceInfoByType(kind mediadevices.MediaDeviceType, dtype driver.DeviceType, label string) (smd mediadevices.MediaDeviceInfo, err error) {
-	log.Println("i.GetDeviceInfoByType:", kind, dtype, label)
-
-	mds := mediadevices.EnumerateDevices()
-	for _, md := range mds {
-		if md.Kind == kind {
-			if md.DeviceType == dtype {
-				if label == "" && smd.DeviceID == "" {
-					smd = md
-				} else {
-					if CaseInsensitiveContains(md.Label, label) && smd.DeviceID == "" {
-						smd = md
-					}
-				}
-			}
-		}
-	}
-	if smd.DeviceID == "" {
-		err = fmt.Errorf("no device selected for %v, %v, %s", kind, dtype, label)
-		log.Println(err)
-	} else {
-		log.Println("select>", smd.DeviceID, smd.Kind, smd.Label, smd.DeviceType)
 	}
 	return
 }
