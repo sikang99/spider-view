@@ -69,7 +69,7 @@ type Program struct {
 
 //---------------------------------------------------------------------------------
 func init() {
-	runtime.LockOSThread()
+	// runtime.LockOSThread()
 	log.SetFlags(log.Ldate | log.Ltime | log.Lshortfile)
 }
 
@@ -121,12 +121,12 @@ func main() {
 			pg.SpiderServer, pg.ChannelID, pg.VideoCodec)
 	}
 
-	// err := pg.openFFmpeg()
-	// if err != nil {
-	// 	log.Println(err)
-	// 	return
-	// }
-	// defer pg.closeFFmpeg()
+	err := pg.openFFmpeg()
+	if err != nil {
+		log.Println(err)
+		return
+	}
+	defer pg.closeFFmpeg()
 
 	ws, err := pg.connectWebsocketByUrl(pg.URL, 1024)
 	if err != nil {
@@ -135,23 +135,17 @@ func main() {
 	}
 	defer ws.Close()
 
-	// -- webrtc configuration to use
 	rtcConfig := pg.setRTCConfiguratrion()
-	// rc, _ := json.Marshal(rtcConfig.SDPSemantics)
-	// rc, _ := json.Marshal(rtcConfig)
-	// log.Println(string(rc))
 
 	me := webrtc.MediaEngine{}
 	me.RegisterDefaultCodecs()
 
 	api := webrtc.NewAPI(webrtc.WithMediaEngine(me))
 	pg.pc, err = api.NewPeerConnection(rtcConfig)
-
 	if err != nil {
 		log.Println(err)
 		return
 	}
-	// log.Println(pc)
 
 	// ivfWriter, err := ivfwriter.NewWith(pg.ffmpeg.stdin)
 	// if err != nil {
@@ -183,7 +177,7 @@ func main() {
 	})
 
 	pg.pc.OnTrack(func(track *webrtc.Track, receiver *webrtc.RTPReceiver) {
-		// Send a PLI on an interval so that the publisher is pushing a keyframe every rtcpPLIInterval
+		log.Println("w.OnTrack:", track.ID(), track.PayloadType(), track.Codec().RTPCodecCapability.MimeType)
 		go func() {
 			ticker := time.NewTicker(time.Second * 3)
 			for range ticker.C {
@@ -195,23 +189,20 @@ func main() {
 			}
 		}()
 
-		log.Printf("Track has started, of type %d: %s \n",
-			track.PayloadType(), track.Codec().RTPCodecCapability.MimeType)
-		for {
-			// Read RTP packets being sent to Pion
-			// rtp, err := track.ReadRTP()
-			_, err := track.ReadRTP()
-			if err != nil {
-				log.Println(err)
-				return
-			}
+		// for pg.ok {
+		// 	// Read RTP packets being sent to Pion
+		// 	rtp, err := track.ReadRTP()
+		// 	if err != nil {
+		// 		log.Println(err)
+		// 		return
+		// 	}
 
-			// err = ivfWriter.WriteRTP(rtp)
-			// if err != nil {
-			// 	log.Println(err)
-			// 	return
-			// }
-		}
+		// 	err = ivfWriter.WriteRTP(rtp)
+		// 	if err != nil {
+		// 		log.Println(err)
+		// 		return
+		// 	}
+		// }
 	})
 
 	pg.pc.OnDataChannel(func(dc *webrtc.DataChannel) {
@@ -278,6 +269,7 @@ func (d *Program) closeFFmpeg() (err error) {
 func (d *Program) detectMotion() (err error) {
 	log.Println("i.detectMotion")
 
+	runtime.LockOSThread()
 	window := gocv.NewWindow("Spider Video Viewer")
 	defer window.Close() //nolint
 
