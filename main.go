@@ -17,7 +17,6 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
-	"runtime"
 	"strconv"
 	"time"
 
@@ -26,6 +25,7 @@ import (
 
 	"github.com/pion/rtcp"
 	"github.com/pion/webrtc/v2"
+	"github.com/pion/webrtc/v2/pkg/media/h264writer"
 )
 
 //---------------------------------------------------------------------------------
@@ -55,9 +55,9 @@ type Program struct {
 	ChannelID        string `json:"channel_id,omitempty"`
 	URL              string `json:"url,omitempty"`
 	// -- Internal handling parts
-	ok     bool
-	pc     *webrtc.PeerConnection
-	ws     *websocket.Conn
+	ok bool
+	pc *webrtc.PeerConnection
+	// ws     *websocket.Conn
 	msgch  chan WsMessage
 	ffmpeg struct {
 		cmd    *exec.Cmd
@@ -98,16 +98,6 @@ func main() {
 	}
 
 	// Handle command line options
-	// flag.IntVar(&pg.VideoWidth, "vwidth", pg.VideoWidth, "video width to use")
-	// flag.IntVar(&pg.VideoHeight, "vheight", pg.VideoHeight, "video height to use")
-	// flag.BoolVar(&pg.VideoNouse, "vnouse", pg.VideoNouse, "video no use")
-	// flag.BoolVar(&pg.AudioNouse, "anouse", pg.AudioNouse, "audio no use")
-	// flag.StringVar(&pg.VideoType, "vtype", pg.VideoType, "video device type [camera|screen]")
-	// flag.StringVar(&pg.AudioType, "atype", pg.AudioType, "audio device type [microphone]")
-	// flag.StringVar(&pg.VideoLabel, "vlabel", pg.VideoLabel, "label of video device to select")
-	// flag.StringVar(&pg.AudioLabel, "alabel", pg.AudioLabel, "label of audio device to select")
-	// flag.StringVar(&pg.VideoCodec, "vcodec", pg.VideoCodec, "video codec to use [h264|vp8|vp9]")
-	// flag.StringVar(&pg.AudioCodec, "acodec", pg.AudioCodec, "audio codec to use [opus]")
 	flag.IntVar(&pg.BitRate, "brate", pg.BitRate, "bit rate of video to send in bps")
 	flag.IntVar(&pg.KeyFrameInterval, "kint", pg.KeyFrameInterval, "key frame interval")
 	flag.StringVar(&pg.ICEServer, "ice", pg.ICEServer, "ice server address to use")
@@ -147,11 +137,12 @@ func main() {
 		return
 	}
 
-	// ivfWriter, err := ivfwriter.NewWith(pg.ffmpeg.stdin)
-	// if err != nil {
-	// 	log.Println(err)
-	// 	return
-	// }
+	h264Writer := h264writer.NewWith(pg.ffmpeg.stdin)
+	if err != nil {
+		log.Println(err)
+		return
+	}
+	log.Println(h264Writer)
 
 	pg.pc.OnICEConnectionStateChange(func(connectionState webrtc.ICEConnectionState) {
 		log.Println("w.OnICEConnectionState:", connectionState)
@@ -178,6 +169,10 @@ func main() {
 
 	pg.pc.OnTrack(func(track *webrtc.Track, receiver *webrtc.RTPReceiver) {
 		log.Println("w.OnTrack:", track.ID(), track.PayloadType(), track.Codec().RTPCodecCapability.MimeType)
+		if track.Kind() != webrtc.RTPCodecTypeVideo {
+			log.Println("ignore>", track.Kind(), "track:", track.ID())
+			return
+		}
 		go func() {
 			ticker := time.NewTicker(time.Second * 3)
 			for range ticker.C {
@@ -189,27 +184,26 @@ func main() {
 			}
 		}()
 
-		// for pg.ok {
-		// 	// Read RTP packets being sent to Pion
-		// 	rtp, err := track.ReadRTP()
-		// 	if err != nil {
-		// 		log.Println(err)
-		// 		return
-		// 	}
+		for pg.ok {
+			rtp, err := track.ReadRTP()
+			if err != nil {
+				log.Println(err)
+				return
+			}
 
-		// 	err = ivfWriter.WriteRTP(rtp)
-		// 	if err != nil {
-		// 		log.Println(err)
-		// 		return
-		// 	}
-		// }
+			err = h264Writer.WriteRTP(rtp)
+			if err != nil {
+				log.Println(err)
+				return
+			}
+		}
 	})
 
 	pg.pc.OnDataChannel(func(dc *webrtc.DataChannel) {
 		log.Println("w.OnDataChannel:", dc.ID(), dc.Label())
 	})
 
-	// go pg.detectMotion()
+	go pg.detectMotion()
 
 	err = pg.addRecvMediaTranceivers(true, true)
 	if err != nil {
@@ -269,12 +263,12 @@ func (d *Program) closeFFmpeg() (err error) {
 func (d *Program) detectMotion() (err error) {
 	log.Println("i.detectMotion")
 
-	runtime.LockOSThread()
+	// runtime.LockOSThread()
 	window := gocv.NewWindow("Spider Video Viewer")
-	defer window.Close() //nolint
+	defer window.Close()
 
 	img := gocv.NewMat()
-	defer img.Close() //nolint
+	defer img.Close()
 
 	for d.ok {
 		buf := make([]byte, d.VideoWidth*d.VideoHeight*3)
@@ -293,7 +287,6 @@ func (d *Program) detectMotion() (err error) {
 			break
 		}
 	}
-
 	return
 }
 
@@ -325,7 +318,7 @@ func (d *Program) setRTCConfiguratrion() (rtcConfig webrtc.Configuration) {
 
 //---------------------------------------------------------------------------------
 func (d *Program) addRecvMediaTranceivers(faudio, fvideo bool) (err error) {
-	log.Println("i.addRecvMediaTranceivers:", faudio, fvideo)
+	log.Println("i.addRecvMediaTranceivers:", "audio:", faudio, "video:", fvideo)
 
 	if faudio {
 		_, err = d.pc.AddTransceiver(webrtc.RTPCodecTypeAudio)

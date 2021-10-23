@@ -13,10 +13,11 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/pion/example-webrtc-applications/v3/internal/signal"
+	//"github.com/pion/example-webrtc-applications/v3/internal/signal"
 	"github.com/pion/rtcp"
 	"github.com/pion/webrtc/v3"
 	"github.com/pion/webrtc/v3/pkg/media/ivfwriter"
+	"github.com/sikang99/spider-view/examples/signal"
 	"gocv.io/x/gocv"
 )
 

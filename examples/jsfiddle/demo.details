@@ -1,5 +1,0 @@
----
- name: gocv-receive
- description: Example of using Pion WebRTC with GoCV to do motion detection
- authors:
-   - Sean DuBois
